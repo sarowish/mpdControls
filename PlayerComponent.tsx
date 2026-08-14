@@ -1,25 +1,13 @@
 /*
- * Vencord, a modification for Discord's desktop app
+ * Vencord, a Discord client mod
  * Copyright (c) 2022 Vendicated and contributors
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
-*/
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 
-import "./spotifyStyles.css";
+import "./mpdStyles.css";
 
 import { Flex } from "@components/Flex";
-import { CopyIcon, ImageIcon, LinkIcon, OpenExternalIcon } from "@components/Icons";
+import { CopyIcon, ImageIcon } from "@components/Icons";
 import { Paragraph } from "@components/Paragraph";
 import { Span } from "@components/Span";
 import { debounce } from "@shared/debounce";
@@ -27,13 +15,13 @@ import { classNameFactory } from "@utils/css";
 import { copyWithToast, openImageModal } from "@utils/discord";
 import { classes } from "@utils/misc";
 import { formatDuration } from "@utils/text";
-import { ContextMenuApi, FluxDispatcher, Menu, React, useEffect, useState, useStateFromStores } from "@webpack/common";
+import { ContextMenuApi, Menu, React, useEffect, useState, useStateFromStores } from "@webpack/common";
 
 import { settings } from ".";
+import { MPDStore, Track } from "./MPDStore";
 import { SeekBar } from "./SeekBar";
-import { SpotifyStore, Track } from "./SpotifyStore";
 
-const cl = classNameFactory("vc-spotify-");
+const cl = classNameFactory("vc-mpd-");
 
 function Svg(path: string, label: string) {
     return () => (
@@ -72,30 +60,18 @@ function Button(props: React.ButtonHTMLAttributes<HTMLButtonElement>) {
     );
 }
 
-function CopyContextMenu({ name, type, path }: { type: string; name: string; path: string; }) {
+function CopyContextMenu({ name, type }: { type: string; name: string; }) {
     return (
         <Menu.Menu
-            navId="vc-spotify-menu"
+            navId="vc-mpd-menu"
             onClose={ContextMenuApi.closeContextMenu}
-            aria-label={`Spotify ${type} Menu`}
+            aria-label={`MPD ${type} Menu`}
         >
             <Menu.MenuItem
-                id="vc-spotify-copy-name"
+                id="vc-mpd-copy-name"
                 label={`Copy ${type} Name`}
                 action={() => copyWithToast(name)}
                 icon={CopyIcon}
-            />
-            <Menu.MenuItem
-                id="vc-spotify-copy-link"
-                label={`Copy ${type} Link`}
-                action={() => copyWithToast("https://open.spotify.com" + path)}
-                icon={LinkIcon}
-            />
-            <Menu.MenuItem
-                id="vc-spotify-open"
-                label={`Open ${type} in Spotify`}
-                action={() => SpotifyStore.openExternal(path)}
-                icon={OpenExternalIcon}
             />
         </Menu.Menu>
     );
@@ -103,14 +79,14 @@ function CopyContextMenu({ name, type, path }: { type: string; name: string; pat
 
 function Controls() {
     const [isPlaying, shuffle, repeat] = useStateFromStores(
-        [SpotifyStore],
-        () => [SpotifyStore.isPlaying, SpotifyStore.shuffle, SpotifyStore.repeat]
+        [MPDStore],
+        () => [MPDStore.isPlaying, MPDStore.shuffle, MPDStore.repeat]
     );
 
     const [nextRepeat, repeatClassName] = (() => {
         switch (repeat) {
-            case "off": return ["context", "repeat-off"] as const;
-            case "context": return ["track", "repeat-context"] as const;
+            case "off": return ["queue", "repeat-off"] as const;
+            case "queue": return ["track", "repeat-queue"] as const;
             case "track": return ["off", "repeat-track"] as const;
             default: throw new Error(`Invalid repeat state ${repeat}`);
         }
@@ -121,24 +97,24 @@ function Controls() {
         <Flex className={cl("button-row")} gap="0">
             <Button
                 className={classes(cl("button"), cl("shuffle"), cl(shuffle ? "shuffle-on" : "shuffle-off"))}
-                onClick={() => SpotifyStore.setShuffle(!shuffle)}
+                onClick={() => MPDStore.setShuffle(!shuffle)}
             >
                 <Shuffle />
             </Button>
             <Button onClick={() => {
-                settings.store.previousButtonRestartsTrack && SpotifyStore.position > 3000 ? SpotifyStore.seek(0) : SpotifyStore.prev();
+                settings.store.previousButtonRestartsTrack && MPDStore.positionMs > 3000 ? MPDStore.seek(0) : MPDStore.previous();
             }}>
                 <SkipPrev />
             </Button>
-            <Button onClick={() => SpotifyStore.setPlaying(!isPlaying)}>
+            <Button onClick={() => MPDStore.setPlaying(!isPlaying)}>
                 {isPlaying ? <PauseButton /> : <PlayButton />}
             </Button>
-            <Button onClick={() => SpotifyStore.next()}>
+            <Button onClick={() => MPDStore.next()}>
                 <SkipNext />
             </Button>
             <Button
                 className={classes(cl("button"), cl("repeat"), cl(repeatClassName))}
-                onClick={() => SpotifyStore.setRepeat(nextRepeat)}
+                onClick={() => MPDStore.setRepeat(nextRepeat)}
                 style={{ position: "relative" }}
             >
                 {repeat === "track" && <span className={cl("repeat-1")}>1</span>}
@@ -149,22 +125,21 @@ function Controls() {
 }
 
 const seek = debounce((v: number) => {
-    SpotifyStore.seek(v);
+    MPDStore.seek(v);
 });
 
-function SpotifySeekBar() {
-    const { duration } = SpotifyStore.track!;
-
+function MPDSeekBar({ durationMs }: { durationMs: number; }) {
     const [storePosition, isSettingPosition, isPlaying] = useStateFromStores(
-        [SpotifyStore],
-        () => [SpotifyStore.mPosition, SpotifyStore.isSettingPosition, SpotifyStore.isPlaying]
+        [MPDStore],
+        () => [MPDStore.basePositionMs, MPDStore.isSettingPosition, MPDStore.isPlaying]
     );
 
     const [position, setPosition] = useState(storePosition);
 
     useEffect(() => {
+        setPosition(MPDStore.positionMs);
+
         if (isPlaying && !isSettingPosition) {
-            setPosition(SpotifyStore.position);
             const interval = setInterval(() => {
                 setPosition(p => p + 1000);
             }, 1000);
@@ -192,7 +167,7 @@ function SpotifySeekBar() {
             <SeekBar
                 initialValue={position}
                 minValue={0}
-                maxValue={duration}
+                maxValue={durationMs}
                 onValueChange={onChange}
                 asValueChanges={onChange}
                 onValueRender={formatDuration}
@@ -203,89 +178,87 @@ function SpotifySeekBar() {
                 className={cl("progress-time") + " " + cl("time-right")}
                 aria-label="Total Duration"
             >
-                {formatDuration(duration)}
+                {formatDuration(durationMs)}
             </Span>
         </div>
     );
 }
 
 
-function AlbumContextMenu({ track }: { track: Track; }) {
-    const volume = useStateFromStores([SpotifyStore], () => SpotifyStore.volume);
+function AlbumContextMenu({ artwork }: { artwork: { url: string; width: number; height: number; }; }) {
+    const volume = useStateFromStores([MPDStore], () => MPDStore.volume);
 
     return (
         <Menu.Menu
-            navId="spotify-album-menu"
-            onClose={() => FluxDispatcher.dispatch({ type: "CONTEXT_MENU_CLOSE" })}
-            aria-label="Spotify Album Menu"
+            navId="mpd-album-menu"
+            onClose={ContextMenuApi.closeContextMenu}
+            aria-label="MPD Album Menu"
         >
-            <Menu.MenuItem
-                key="open-album"
-                id="open-album"
-                label="Open Album"
-                action={() => SpotifyStore.openExternal(`/album/${track.album.id}`)}
-                icon={OpenExternalIcon}
-            />
             <Menu.MenuItem
                 key="view-cover"
                 id="view-cover"
                 label="View Album Cover"
                 // trolley
-                action={() => openImageModal(track.album.image)}
+                action={() => openImageModal(artwork)}
                 icon={ImageIcon}
             />
-            <Menu.MenuControlItem
-                id="spotify-volume"
-                key="spotify-volume"
-                label="Volume"
-                control={(props, ref) => (
-                    <Menu.MenuSliderControl
-                        {...props}
-                        ref={ref}
-                        value={volume}
-                        minValue={0}
-                        maxValue={100}
-                        onChange={debounce((v: number) => SpotifyStore.setVolume(v))}
-                    />
-                )}
-            />
+            {volume != null && (
+                <Menu.MenuControlItem
+                    id="mpd-volume"
+                    key="mpd-volume"
+                    label="Volume"
+                    control={(props, ref) => (
+                        <Menu.MenuSliderControl
+                            {...props}
+                            ref={ref}
+                            value={volume}
+                            minValue={0}
+                            maxValue={100}
+                            onChange={debounce((v: number) => MPDStore.setVolume(v))}
+                        />
+                    )}
+                />
+            )}
         </Menu.Menu>
     );
 }
 
-function makeLinkProps(type: "Song" | "Artist" | "Album", condition: unknown, name: string, path: string) {
-    if (!condition) return {};
-
+function makeContextMenuProps(type: "Song" | "Artist" | "Album", name: string) {
     return {
-        role: "link",
-        onClick: () => SpotifyStore.openExternal(path),
         onContextMenu: e =>
-            ContextMenuApi.openContextMenu(e, () => <CopyContextMenu type={type} name={name} path={path} />)
+            ContextMenuApi.openContextMenu(e, () => <CopyContextMenu type={type} name={name} />)
     } satisfies React.HTMLAttributes<HTMLElement>;
 }
 
 function Info({ track }: { track: Track; }) {
-    const img = track?.album?.image;
+    const { artworkUrl } = track;
 
     const [coverExpanded, setCoverExpanded] = useState(false);
 
     const i = (
         <>
-            {img && (
+            {artworkUrl && (
                 <img
                     id={cl("album-image")}
-                    src={img.url}
+                    src={artworkUrl}
                     alt="Album Image"
                     onClick={() => setCoverExpanded(!coverExpanded)}
                     onContextMenu={e => {
-                        ContextMenuApi.openContextMenu(e, () => <AlbumContextMenu track={track} />);
+                        const { naturalHeight, naturalWidth } = e.currentTarget;
+                        const artwork = {
+                            url: artworkUrl,
+                            width: naturalWidth || 1,
+                            height: naturalHeight || 1
+                        };
+
+                        ContextMenuApi.openContextMenu(e, () => <AlbumContextMenu artwork={artwork} />);
                     }}
                 />
             )}
         </>
     );
 
-    if (coverExpanded && img)
+    if (coverExpanded && artworkUrl)
         return (
             <div id={cl("album-expanded-wrapper")}>
                 {i}
@@ -300,40 +273,40 @@ function Info({ track }: { track: Track; }) {
                     weight="semibold"
                     id={cl("song-title")}
                     className={cl("ellipoverflow")}
-                    title={track.name}
-                    {...makeLinkProps("Song", track.id, track.name, `/track/${track.id}`)}
+                    title={track.title}
+                    {...makeContextMenuProps("Song", track.title)}
                 >
-                    {track.name}
+                    {track.title}
                 </Paragraph>
-                {track.artists.some(a => a.name) && (
+                {track.artists.some(Boolean) && (
                     <Paragraph className={cl(["ellipoverflow", "secondary-song-info"])}>
                         <span className={cl("song-info-prefix")}>by&nbsp;</span>
-                        {track.artists.map((a, i) => (
-                            <React.Fragment key={a.name}>
+                        {track.artists.map((artist, i) => (
+                            <React.Fragment key={`${artist}-${i}`}>
                                 <span
                                     className={cl("artist")}
                                     style={{ fontSize: "inherit" }}
-                                    title={a.name}
-                                    {...makeLinkProps("Artist", a.id, a.name, `/artist/${a.id}`)}
+                                    title={artist}
+                                    {...makeContextMenuProps("Artist", artist)}
                                 >
-                                    {a.name}
+                                    {artist}
                                 </span>
                                 {i !== track.artists.length - 1 && <span className={cl("comma")}>{", "}</span>}
                             </React.Fragment>
                         ))}
                     </Paragraph>
                 )}
-                {track.album.name && (
+                {track.album && (
                     <Paragraph className={cl(["ellipoverflow", "secondary-song-info"])}>
                         <span className={cl("song-info-prefix")}>on&nbsp;</span>
                         <span
                             id={cl("album-title")}
                             className={cl("album")}
                             style={{ fontSize: "inherit" }}
-                            title={track.album.name}
-                            {...makeLinkProps("Album", track.album.id, track.album.name, `/album/${track.album.id}`)}
+                            title={track.album}
+                            {...makeContextMenuProps("Album", track.album)}
                         >
-                            {track.album.name}
+                            {track.album}
                         </span>
                     </Paragraph>
                 )}
@@ -343,21 +316,9 @@ function Info({ track }: { track: Track; }) {
 }
 
 export function Player() {
-    const track = useStateFromStores(
-        [SpotifyStore],
-        () => SpotifyStore.track,
-        null,
-        (prev, next) => prev?.id ? (prev.id === next?.id) : prev?.name === next?.name
-    );
-
-    const device = useStateFromStores(
-        [SpotifyStore],
-        () => SpotifyStore.device,
-        null,
-        (prev, next) => prev?.id === next?.id
-    );
-
-    const isPlaying = useStateFromStores([SpotifyStore], () => SpotifyStore.isPlaying);
+    const track = useStateFromStores([MPDStore], () => MPDStore.track);
+    const connected = useStateFromStores([MPDStore], () => MPDStore.connected);
+    const isPlaying = useStateFromStores([MPDStore], () => MPDStore.isPlaying);
     const [shouldHide, setShouldHide] = useState(false);
 
     // Hide player after 5 minutes of inactivity
@@ -370,17 +331,13 @@ export function Player() {
         }
     }, [isPlaying]);
 
-    if (!track || !device?.is_active || shouldHide)
+    if (!track || !connected || shouldHide)
         return null;
 
-    const exportTrackImageStyle = {
-        "--vc-spotify-track-image": `url(${track?.album?.image?.url || ""})`,
-    } as React.CSSProperties;
-
     return (
-        <div id={cl("player")} style={exportTrackImageStyle}>
+        <div id={cl("player")}>
             <Info track={track} />
-            <SpotifySeekBar />
+            {track.durationMs > 0 && <MPDSeekBar durationMs={track.durationMs} />}
             <Controls />
         </div>
     );
