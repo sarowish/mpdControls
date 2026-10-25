@@ -177,7 +177,7 @@ export const MPDStore = proxyLazyWebpack(() => {
 
             if (this.artworkUri !== nextTrack.uri) {
                 this.artworkUri = nextTrack.uri;
-                this.artworkUrl = null;
+                // Keep the displayed cover until the new artwork request finishes.
                 this.artworkGeneration++;
                 shouldLoadArtwork = true;
             }
@@ -203,23 +203,23 @@ export const MPDStore = proxyLazyWebpack(() => {
         }
 
         private async loadArtwork(uri: string, generation: number) {
+            let artworkUrl: string | null = null;
             try {
-                const artworkUrl = await Native.getAlbumArt(uri);
-                if (!this.running || generation !== this.artworkGeneration || uri !== this.artworkUri)
-                    return;
-
-                this.artworkUrl = artworkUrl;
-                if (this.track?.uri === uri) {
-                    this.track = {
-                        ...this.track,
-                        artworkUrl
-                    };
-                    this.emitChange();
-                }
+                artworkUrl = await Native.getAlbumArt(uri);
             } catch {
                 if (generation === this.artworkGeneration && uri === this.artworkUri)
                     this.artworkUri = null;
             }
+
+            if (!this.running || generation !== this.artworkGeneration || this.track?.uri !== uri)
+                return;
+
+            this.artworkUrl = artworkUrl;
+            this.track = {
+                ...this.track,
+                artworkUrl
+            };
+            this.emitChange();
         }
 
         private runCommand(description: string, command: Promise<void>) {
