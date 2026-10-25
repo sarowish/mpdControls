@@ -11,7 +11,7 @@ import { Flux, FluxDispatcher } from "@webpack/common";
 import type { MPDPlayerState, MPDTrackState, RepeatMode } from "./native";
 
 const Native = VencordNative.pluginHelpers.MPDControls as PluginNative<typeof import("./native")>;
-const POLL_INTERVAL = 1_000;
+const RECONNECT_DELAY = 1_000;
 
 export interface Track extends MPDTrackState {
     artworkUrl: string | null;
@@ -32,9 +32,8 @@ export const MPDStore = proxyLazyWebpack(() => {
         public isSettingPosition = false;
 
         private running = false;
-        private pollTimeout: ReturnType<typeof setTimeout> | null = null;
-        private refreshGeneration = 0;
-        private appliedRefreshGeneration = 0;
+        private watcherId: string | null = null;
+        private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
         private artworkGeneration = 0;
         private artworkUri: string | null = null;
         private artworkUrl: string | null = null;
@@ -59,14 +58,21 @@ export const MPDStore = proxyLazyWebpack(() => {
                 return;
 
             this.running = true;
-            void this.poll();
+            this.watcherId = crypto.randomUUID();
+            void this.watch(this.watcherId);
         }
 
         stop() {
             this.running = false;
-            if (this.pollTimeout != null)
-                clearTimeout(this.pollTimeout);
-            this.pollTimeout = null;
+            if (this.reconnectTimeout != null)
+                clearTimeout(this.reconnectTimeout);
+            this.reconnectTimeout = null;
+            if (this.watcherId != null) {
+                void Native.stopWatching(this.watcherId).catch(error => {
+                    console.error("[VencordMPDControls] Failed to stop watching MPD", error);
+                });
+                this.watcherId = null;
+            }
             this.clearPlayer();
             this.emitChange();
         }
@@ -80,28 +86,19 @@ export const MPDStore = proxyLazyWebpack(() => {
         }
 
         setVolume(volume: number) {
-            this.runCommand("set volume", Native.setVolume(volume), () => {
-                this.volume = volume;
-            });
+            this.runCommand("set volume", Native.setVolume(volume));
         }
 
         setPlaying(playing: boolean) {
-            this.runCommand(playing ? "resume playback" : "pause playback", Native.setPlaying(playing), () => {
-                this.positionMs = this.positionMs;
-                this.isPlaying = playing;
-            });
+            this.runCommand(playing ? "resume playback" : "pause playback", Native.setPlaying(playing));
         }
 
         setRepeat(repeat: RepeatMode) {
-            this.runCommand("set repeat mode", Native.setRepeat(repeat), () => {
-                this.repeat = repeat;
-            });
+            this.runCommand("set repeat mode", Native.setRepeat(repeat));
         }
 
         setShuffle(shuffle: boolean) {
-            this.runCommand("set random mode", Native.setShuffle(shuffle), () => {
-                this.shuffle = shuffle;
-            });
+            this.runCommand("set random mode", Native.setShuffle(shuffle));
         }
 
         async seek(positionMs: number) {
@@ -113,41 +110,27 @@ export const MPDStore = proxyLazyWebpack(() => {
 
             try {
                 await Native.seek(this.track.id, positionMs);
-                this.positionMs = positionMs;
             } catch (error) {
                 console.error("[VencordMPDControls] Failed to seek", error);
             } finally {
                 this.isSettingPosition = false;
                 this.emitChange();
-                void this.refresh();
             }
         }
 
-        private async poll() {
-            await this.refresh();
-
-            if (this.running) {
-                this.pollTimeout = setTimeout(() => {
-                    void this.poll();
-                }, POLL_INTERVAL);
-            }
-        }
-
-        private async refresh() {
-            const generation = ++this.refreshGeneration;
-
+        private async watch(watcherId: string) {
             try {
-                const state = await Native.getState();
-                if (!this.running || generation < this.appliedRefreshGeneration)
-                    return;
+                while (this.running && this.watcherId === watcherId) {
+                    const state = await Native.waitForState(watcherId);
+                    if (!this.running || this.watcherId !== watcherId || state == null)
+                        return;
 
-                this.appliedRefreshGeneration = generation;
-                this.applyState(state);
+                    this.applyState(state);
+                }
             } catch (error) {
-                if (!this.running || generation < this.appliedRefreshGeneration)
+                if (!this.running || this.watcherId !== watcherId)
                     return;
 
-                this.appliedRefreshGeneration = generation;
                 if (!this.loggedConnectionError) {
                     console.warn("[VencordMPDControls] Failed to connect to MPD", error);
                     this.loggedConnectionError = true;
@@ -155,6 +138,10 @@ export const MPDStore = proxyLazyWebpack(() => {
 
                 this.clearPlayer();
                 this.emitChange();
+                this.reconnectTimeout = setTimeout(() => {
+                    this.reconnectTimeout = null;
+                    void this.watch(watcherId);
+                }, RECONNECT_DELAY);
             }
         }
 
@@ -225,14 +212,9 @@ export const MPDStore = proxyLazyWebpack(() => {
             }
         }
 
-        private runCommand(description: string, command: Promise<void>, onSuccess?: () => void) {
-            void command.then(() => {
-                onSuccess?.();
-                this.emitChange();
-                void this.refresh();
-            }).catch(error => {
+        private runCommand(description: string, command: Promise<void>) {
+            void command.catch(error => {
                 console.error(`[VencordMPDControls] Failed to ${description}`, error);
-                void this.refresh();
             });
         }
 

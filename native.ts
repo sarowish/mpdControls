@@ -6,7 +6,7 @@
 
 import { createConnection, Socket } from "node:net";
 
-import type { IpcMainInvokeEvent } from "electron";
+import type { IpcMainInvokeEvent, WebContents } from "electron";
 
 const MPD_HOST = "127.0.0.1";
 const MPD_PORT = 6600;
@@ -121,7 +121,9 @@ class MPDConnection {
         this.wakeReader = null;
     }
 
-    async command(command: string) {
+    async command(command: string, timeout = CONNECTION_TIMEOUT) {
+        this.socket.setTimeout(timeout);
+
         await new Promise<void>((resolve, reject) => {
             this.socket.write(command + "\n", error => error ? reject(error) : resolve());
         });
@@ -287,36 +289,102 @@ async function readArtwork(command: "albumart" | "readpicture", uri: string) {
     });
 }
 
-export async function getState(_: IpcMainInvokeEvent): Promise<MPDPlayerState> {
-    return await withConnection(async connection => {
-        const status = await connection.command("status");
-        const song = await connection.command("currentsong");
-        const uri = song.get("file");
-        const repeatEnabled = status.get("repeat") === "1";
-        const singleEnabled = status.get("single") === "1";
-        const rawVolume = status.get("volume");
-        const parsedVolume = rawVolume == null ? null : numberValue(rawVolume, -1);
-        const durationMs = numberValue(song.get("duration"), numberValue(status.get("duration"))) * 1_000;
-        const artists = song.getAll("artist");
+async function readState(connection: MPDConnection): Promise<MPDPlayerState> {
+    const status = await connection.command("status");
+    const song = await connection.command("currentsong");
+    const uri = song.get("file");
+    const repeatEnabled = status.get("repeat") === "1";
+    const singleEnabled = status.get("single") === "1";
+    const rawVolume = status.get("volume");
+    const parsedVolume = rawVolume == null ? null : numberValue(rawVolume, -1);
+    const durationMs = numberValue(song.get("duration"), numberValue(status.get("duration"))) * 1_000;
+    const artists = song.getAll("artist");
 
-        return {
-            track: uri
-                ? {
-                    id: song.get("id") || status.get("songid") || uri,
-                    uri,
-                    title: song.get("title") || song.get("name") || trackName(uri),
-                    durationMs,
-                    album: song.get("album") || "",
-                    artists: artists.length ? artists : song.getAll("albumartist")
+    return {
+        track: uri
+            ? {
+                id: song.get("id") || status.get("songid") || uri,
+                uri,
+                title: song.get("title") || song.get("name") || trackName(uri),
+                durationMs,
+                album: song.get("album") || "",
+                artists: artists.length ? artists : song.getAll("albumartist")
+            }
+            : null,
+        isPlaying: status.get("state") === "play",
+        positionMs: numberValue(status.get("elapsed")) * 1_000,
+        volume: parsedVolume != null && parsedVolume >= 0 ? parsedVolume : null,
+        repeat: repeatEnabled ? (singleEnabled ? "track" : "queue") : "off",
+        shuffle: status.get("random") === "1"
+    };
+}
+
+const stateWatchers = new Map<WebContents, MPDStateWatcher>();
+
+class MPDStateWatcher {
+    private connection: MPDConnection | null = null;
+    private closed = false;
+
+    constructor(public readonly id: string, private readonly sender: WebContents) {
+        sender.once("destroyed", this.close);
+        sender.once("render-process-gone", this.close);
+        sender.once("did-navigate", this.close);
+    }
+
+    close = () => {
+        if (this.closed)
+            return;
+
+        this.closed = true;
+        this.connection?.close();
+        this.sender.off("destroyed", this.close);
+        this.sender.off("render-process-gone", this.close);
+        this.sender.off("did-navigate", this.close);
+        if (stateWatchers.get(this.sender) === this)
+            stateWatchers.delete(this.sender);
+    };
+
+    async next(): Promise<MPDPlayerState | null> {
+        try {
+            if (this.connection) {
+                // MPD may stay idle indefinitely. Restore the timeout when reading state.
+                await this.connection.command("idle player mixer options playlist database output", 0);
+            } else {
+                const connection = await MPDConnection.connect();
+                if (this.closed) {
+                    connection.close();
+                    return null;
                 }
-                : null,
-            isPlaying: status.get("state") === "play",
-            positionMs: numberValue(status.get("elapsed")) * 1_000,
-            volume: parsedVolume != null && parsedVolume >= 0 ? parsedVolume : null,
-            repeat: repeatEnabled ? (singleEnabled ? "track" : "queue") : "off",
-            shuffle: status.get("random") === "1"
-        };
-    });
+
+                this.connection = connection;
+            }
+
+            return await readState(this.connection);
+        } catch (error) {
+            const wasClosed = this.closed;
+            this.close();
+            if (wasClosed)
+                return null;
+            throw error;
+        }
+    }
+}
+
+export async function waitForState({ sender }: IpcMainInvokeEvent, watcherId: string) {
+    let watcher = stateWatchers.get(sender);
+    if (watcher?.id !== watcherId) {
+        watcher?.close();
+        watcher = new MPDStateWatcher(watcherId, sender);
+        stateWatchers.set(sender, watcher);
+    }
+
+    return await watcher.next();
+}
+
+export function stopWatching({ sender }: IpcMainInvokeEvent, watcherId: string) {
+    const watcher = stateWatchers.get(sender);
+    if (watcher?.id === watcherId)
+        watcher.close();
 }
 
 export async function previous(_: IpcMainInvokeEvent) {

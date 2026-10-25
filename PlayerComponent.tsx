@@ -141,7 +141,7 @@ function MPDSeekBar({ durationMs }: { durationMs: number; }) {
 
         if (isPlaying && !isSettingPosition) {
             const interval = setInterval(() => {
-                setPosition(p => p + 1000);
+                setPosition(MPDStore.positionMs);
             }, 1000);
 
             return () => clearInterval(interval);
