@@ -124,10 +124,6 @@ function Controls() {
     );
 }
 
-const seek = debounce((v: number) => {
-    MPDStore.seek(v);
-});
-
 function MPDSeekBar({ durationMs }: { durationMs: number; }) {
     const [storePosition, isSettingPosition, isPlaying] = useStateFromStores(
         [MPDStore],
@@ -135,13 +131,21 @@ function MPDSeekBar({ durationMs }: { durationMs: number; }) {
     );
 
     const [position, setPosition] = useState(storePosition);
+    const isSeeking = React.useRef(false);
+    const seek = React.useMemo(() => debounce(async (v: number) => {
+        await MPDStore.seek(v);
+        isSeeking.current = false;
+        setPosition(MPDStore.positionMs);
+    }), []);
 
     useEffect(() => {
-        setPosition(MPDStore.positionMs);
+        if (!isSeeking.current)
+            setPosition(MPDStore.positionMs);
 
         if (isPlaying && !isSettingPosition) {
             const interval = setInterval(() => {
-                setPosition(MPDStore.positionMs);
+                if (!isSeeking.current)
+                    setPosition(MPDStore.positionMs);
             }, 1000);
 
             return () => clearInterval(interval);
@@ -150,6 +154,7 @@ function MPDSeekBar({ durationMs }: { durationMs: number; }) {
 
     const onChange = (v: number) => {
         if (isSettingPosition) return;
+        isSeeking.current = true;
         setPosition(v);
         seek(v);
     };

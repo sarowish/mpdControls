@@ -39,6 +39,7 @@ export const MPDStore = proxyLazyWebpack(() => {
         private artworkUrl: string | null = null;
         private loggedConnectionError = false;
         private positionUpdatedAt = 0;
+        private positionGeneration = 0;
 
         public get positionMs() {
             let position = this.basePositionMs;
@@ -51,6 +52,7 @@ export const MPDStore = proxyLazyWebpack(() => {
         public set positionMs(position: number) {
             this.basePositionMs = position;
             this.positionUpdatedAt = Date.now();
+            this.positionGeneration++;
         }
 
         start() {
@@ -105,12 +107,20 @@ export const MPDStore = proxyLazyWebpack(() => {
             if (this.isSettingPosition || !this.track)
                 return;
 
+            const previousPositionMs = this.basePositionMs;
+            const previousUpdatedAt = this.positionUpdatedAt;
+            this.positionMs = positionMs;
+            const { positionGeneration } = this;
             this.isSettingPosition = true;
             this.emitChange();
 
             try {
                 await Native.seek(this.track.id, positionMs);
             } catch (error) {
+                if (this.positionGeneration === positionGeneration) {
+                    this.basePositionMs = previousPositionMs;
+                    this.positionUpdatedAt = previousUpdatedAt;
+                }
                 console.error("[VencordMPDControls] Failed to seek", error);
             } finally {
                 this.isSettingPosition = false;
