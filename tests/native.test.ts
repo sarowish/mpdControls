@@ -12,7 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import type { IpcMainInvokeEvent } from "electron";
 
-import { stopWatching, waitForState } from "./native";
+import { stopWatching, waitForState } from "../native";
 
 const IDLE_COMMAND = "idle player mixer options playlist database output";
 

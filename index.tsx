@@ -9,9 +9,9 @@ import { disableStyle, enableStyle } from "@api/Styles";
 import ErrorBoundary from "@components/ErrorBoundary";
 import definePlugin, { OptionType } from "@utils/types";
 
-import hoverOnlyStyle from "./hoverOnly.css?managed";
-import { MPDStore } from "./MPDStore";
-import { Player } from "./PlayerComponent";
+import { Player } from "./src/components/PlayerComponent";
+import { MPDStore } from "./src/MPDStore";
+import hoverOnlyStyle from "./src/styles/hoverOnly.css?managed";
 
 export const settings = definePluginSettings({
     hoverControls: {

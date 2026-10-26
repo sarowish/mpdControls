@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { mock, test, TestContext } from "node:test";
 
-import type { MPDPlayerState } from "./native";
+import type { MPDPlayerState } from "../src/native";
 
 const Native = {
     seek: async (_songId: string, _positionMs: number) => { },
@@ -30,7 +30,7 @@ async function setup(t: TestContext, isPlaying = true) {
     const request = Promise.withResolvers<void>();
     const seek = t.mock.method(Native, "seek", () => request.promise);
 
-    const { MPDStore: store } = await import("./MPDStore");
+    const { MPDStore: store } = await import("../src/MPDStore");
     t.after(() => store.stop());
 
     const state: MPDPlayerState = {

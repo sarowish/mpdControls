@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import "./mpdStyles.css";
+import "../styles/mpdStyles.css";
 
 import { Flex } from "@components/Flex";
 import { CopyIcon, ImageIcon } from "@components/Icons";
@@ -17,8 +17,8 @@ import { classes } from "@utils/misc";
 import { formatDuration } from "@utils/text";
 import { ContextMenuApi, Menu, React, useEffect, useState, useStateFromStores } from "@webpack/common";
 
-import { settings } from ".";
-import { MPDStore, Track } from "./MPDStore";
+import { settings } from "../..";
+import { MPDStore, Track } from "../MPDStore";
 import { SeekBar } from "./SeekBar";
 
 const cl = classNameFactory("vc-mpd-");
